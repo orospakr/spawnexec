@@ -1,4 +1,4 @@
-module github.com/spawnexec/spawnexec
+module github.com/orospakr/spawnexec
 
 go 1.25.2
 

@@ -1,6 +1,8 @@
-// Package spawnexec provides an API compatible with os/exec but uses posix_spawn
-// on macOS (darwin) instead of fork+exec, which can be more efficient for
-// spawning processes from large parent processes.
+// Golang os/exec-compatible package that uses posix_spawn on macOS instead of fork+exec,
+// to avoid atfork bugs in system frameworks and improve performance.
+//
+// macOS as a platform clearly prefers the use of posix_spawn instead of the classic
+// UNIX fork exec pattern.
 package spawnexec
 
 import (
