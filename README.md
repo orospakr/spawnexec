@@ -6,7 +6,7 @@ A drop-in replacement for Go's `os/exec` package that uses `posix_spawn` on macO
 
 macOS system frameworks (CoreFoundation, Security, etc.) register `atfork` handlers that can cause issues when a large Go process forks:
 
-- **Deadlocks** in system framework code during fork
+- **Deadlocks and busy-wait spins** in system framework code during fork
 - **Performance overhead** from copying page tables and running atfork handlers
 - **Memory pressure** from copy-on-write overhead in large processes
 
@@ -108,9 +108,9 @@ err := cmd.Run() // Will be killed after 5 seconds
 
 ## Platform Support
 
-| Platform | Implementation |
-|----------|----------------|
-| macOS (Darwin) | `posix_spawn` via cgo |
+| Platform             | Implementation          |
+| -------------------- | ----------------------- |
+| macOS (Darwin)       | `posix_spawn` via cgo   |
 | Linux, Windows, etc. | Falls back to `os/exec` |
 
 On non-Darwin platforms, the package transparently wraps `os/exec`, so your code remains portable.
@@ -125,13 +125,14 @@ On non-Darwin platforms, the package transparently wraps `os/exec`, so your code
 Benchmarks on Apple M2 Pro show `spawnexec` is **35-42% faster** than `os/exec`:
 
 | Operation | spawnexec | os/exec | Improvement |
-|-----------|-----------|---------|-------------|
-| Run(true) | 1.24ms | 1.90ms | 35% faster |
-| Run(echo) | 1.28ms | 1.95ms | 35% faster |
-| Output | 1.26ms | 2.16ms | 42% faster |
-| WithStdin | 1.38ms | 2.17ms | 37% faster |
+| --------- | --------- | ------- | ----------- |
+| Run(true) | 1.24ms    | 1.90ms  | 35% faster  |
+| Run(echo) | 1.28ms    | 1.95ms  | 35% faster  |
+| Output    | 1.26ms    | 2.16ms  | 42% faster  |
+| WithStdin | 1.38ms    | 2.17ms  | 37% faster  |
 
 Run benchmarks yourself:
+
 ```bash
 go test -bench=. -benchmem ./...
 ```
@@ -153,6 +154,7 @@ The following `os/exec` APIs are supported:
 - `(*Cmd).StderrPipe() (io.ReadCloser, error)`
 
 Supported `Cmd` fields:
+
 - `Path`, `Args`, `Env`, `Dir`
 - `Stdin`, `Stdout`, `Stderr`
 - `ExtraFiles`
