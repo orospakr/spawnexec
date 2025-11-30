@@ -500,8 +500,9 @@ func (c *Cmd) startGoroutines() {
 	for i, fn := range c.goroutine {
 		i, fn := i, fn
 		go func() {
+			err := fn()
 			c.goroutineMu.Lock()
-			c.goroutineErr[i] = fn()
+			c.goroutineErr[i] = err
 			c.goroutineMu.Unlock()
 		}()
 	}

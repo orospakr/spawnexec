@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/spawnexec/spawnexec"
+	"github.com/orospakr/spawnexec"
 )
 
 // Comparison benchmarks between spawnexec and os/exec

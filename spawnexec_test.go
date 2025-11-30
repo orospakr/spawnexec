@@ -580,3 +580,317 @@ func TestIsDarwin(t *testing.T) {
 		t.Log("Running on", runtime.GOOS, "- using os/exec fallback")
 	}
 }
+
+// TestStdinEmptyEOF tests that EOF is properly sent when stdin is empty
+func TestStdinEmptyEOF(t *testing.T) {
+	// Use 'cat' which should exit immediately when receiving EOF on empty stdin
+	cmd := Command("cat")
+	cmd.Stdin = strings.NewReader("")
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Run()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run() with empty stdin error = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Command with empty stdin timed out - EOF may not have been sent")
+	}
+}
+
+// TestStdinZeroLengthReader tests stdin with a zero-length io.Reader
+func TestStdinZeroLengthReader(t *testing.T) {
+	cmd := Command("cat")
+	cmd.Stdin = bytes.NewReader([]byte{})
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Run()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run() with zero-length reader error = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Command with zero-length stdin timed out")
+	}
+}
+
+// TestStdinLargeData tests that large stdin data is handled correctly
+func TestStdinLargeData(t *testing.T) {
+	// Generate 10MB of data
+	size := 10 * 1024 * 1024
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = byte(i % 256)
+	}
+
+	cmd := Command("cat")
+	cmd.Stdin = bytes.NewReader(data)
+
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("Output() with large stdin error = %v", err)
+	}
+
+	if len(out) != size {
+		t.Errorf("output length = %d, want %d", len(out), size)
+	}
+
+	if !bytes.Equal(out, data) {
+		t.Error("output does not match input data")
+	}
+}
+
+// TestStdinProcessReadsUntilEOF tests a process that explicitly reads until EOF
+func TestStdinProcessReadsUntilEOF(t *testing.T) {
+	// Use 'wc -c' which counts bytes and only exits after receiving EOF
+	cmd := Command("wc", "-c")
+	cmd.Stdin = strings.NewReader("hello world")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := cmd.Output()
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Output() with wc -c error = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Process reading until EOF timed out - EOF may not have been sent")
+	}
+}
+
+// TestStdinMultipleWrites tests multiple writes to stdin pipe
+func TestStdinMultipleWrites(t *testing.T) {
+	cmd := Command("cat")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("StdinPipe() error = %v", err)
+	}
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatalf("StdoutPipe() error = %v", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	// Write multiple chunks
+	writes := []string{"first ", "second ", "third"}
+	done := make(chan error, 1)
+	go func() {
+		for _, data := range writes {
+			if _, err := io.WriteString(stdin, data); err != nil {
+				done <- err
+				return
+			}
+		}
+		stdin.Close()
+		done <- nil
+	}()
+
+	// Read output
+	out, err := io.ReadAll(stdout)
+	if err != nil {
+		t.Errorf("ReadAll() error = %v", err)
+	}
+
+	if err := cmd.Wait(); err != nil {
+		t.Errorf("Wait() error = %v", err)
+	}
+
+	if err := <-done; err != nil {
+		t.Errorf("Write goroutine error = %v", err)
+	}
+
+	want := "first second third"
+	if string(out) != want {
+		t.Errorf("output = %q, want %q", out, want)
+	}
+}
+
+// TestStdinBinaryData tests that binary data (including null bytes) is handled correctly
+func TestStdinBinaryData(t *testing.T) {
+	// Create binary data with null bytes and various byte values
+	data := []byte{0, 1, 2, 3, 255, 254, 253, 0, 0, 128, 127}
+
+	cmd := Command("cat")
+	cmd.Stdin = bytes.NewReader(data)
+
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("Output() with binary data error = %v", err)
+	}
+
+	if !bytes.Equal(out, data) {
+		t.Errorf("output = %v, want %v", out, data)
+	}
+}
+
+// TestStdinSlowReader tests stdin with a slow-reading process
+func TestStdinSlowReader(t *testing.T) {
+	// Use a shell script that reads one byte at a time with small delays
+	// This tests that the stdin pipe doesn't close prematurely
+	script := `
+while IFS= read -r -n1 char; do
+	printf '%s' "$char"
+done
+printf '\n'
+`
+	cmd := Command("sh", "-c", script)
+	cmd.Stdin = strings.NewReader("slow")
+
+	done := make(chan []byte, 1)
+	errChan := make(chan error, 1)
+	go func() {
+		out, err := cmd.Output()
+		if err != nil {
+			errChan <- err
+			return
+		}
+		done <- out
+	}()
+
+	select {
+	case err := <-errChan:
+		t.Errorf("Output() with slow reader error = %v", err)
+	case out := <-done:
+		if string(out) != "slow\n" {
+			t.Errorf("output = %q, want %q", out, "slow\n")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Slow reader test timed out")
+	}
+}
+
+// TestStdinPipeCloseTiming tests that closing stdin pipe at the right time allows process to exit
+func TestStdinPipeCloseTiming(t *testing.T) {
+	cmd := Command("cat")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("StdinPipe() error = %v", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	// Write some data
+	io.WriteString(stdin, "data")
+
+	// Close stdin immediately - this should send EOF to the process
+	stdin.Close()
+
+	// Wait should complete quickly since cat should exit after receiving EOF
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Wait() after stdin close error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Wait() timed out after stdin close - EOF may not have been properly sent")
+	}
+}
+
+// TestStdinReaderEOFImmediate tests that a reader that returns EOF immediately works
+func TestStdinReaderEOFImmediate(t *testing.T) {
+	// Create a custom reader that returns EOF on first read
+	eofReader := &immediateEOFReader{}
+
+	cmd := Command("cat")
+	cmd.Stdin = eofReader
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Run()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Run() with immediate EOF reader error = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Command with immediate EOF reader timed out")
+	}
+}
+
+// TestStdinLongRunningProcess tests stdin with a process that takes time to process input
+func TestStdinLongRunningProcess(t *testing.T) {
+	// Use a shell script that processes input then sleeps briefly
+	script := `
+cat
+sleep 0.1
+`
+	cmd := Command("sh", "-c", script)
+	cmd.Stdin = strings.NewReader("test data")
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := cmd.Output()
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Output() with long-running process error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Long-running process test timed out")
+	}
+}
+
+// TestStdinPipeWithNoWrite tests that a process exits when stdin pipe is created but never written to
+func TestStdinPipeWithNoWrite(t *testing.T) {
+	cmd := Command("cat")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatalf("StdinPipe() error = %v", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	// Close stdin immediately without writing - should send EOF
+	stdin.Close()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- cmd.Wait()
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Wait() with no-write stdin error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Command with no-write stdin timed out")
+	}
+}
+
+// immediateEOFReader is a helper that returns EOF on the first Read
+type immediateEOFReader struct{}
+
+func (r *immediateEOFReader) Read(p []byte) (n int, err error) {
+	return 0, io.EOF
+}
